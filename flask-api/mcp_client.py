@@ -7,6 +7,17 @@ from google import genai
 from concurrent.futures import TimeoutError
 from functools import partial
 import json
+import logging
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask with CORS
+app = Flask(__name__)
+CORS(app)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -15,10 +26,15 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 
-max_iterations = 30
+max_iterations = 20
 last_response = None
 iteration = 0
 iteration_response = []
+
+# Global variables for MCP session
+mcp_session = None
+tools = None
+system_prompt = None
 
 async def generate_with_timeout(client, prompt, timeout=10):
     """Generate content with a timeout"""
@@ -52,25 +68,60 @@ def reset_state():
     iteration = 0
     iteration_response = []
 
-async def main():
+def get_or_create_event_loop():
+    try:
+        return asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+@app.route('/api/evaluate', methods=['POST'])
+def evaluate_math_expression():
+    """API endpoint to evaluate math expressions"""
+    try:
+        data = request.get_json()
+        expression = data.get('expression')
+        
+        if not expression:
+            return jsonify({"error": "No expression provided"}), 400
+            
+        loop = get_or_create_event_loop()
+        result = loop.run_until_complete(main(expression))
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error processing expression: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/test', methods=['GET'])
+def test_endpoint():
+    return jsonify({"message": "Flask API is working!"})
+
+async def main(expression=None):
     reset_state()  # Reset at the start of main
-    print("Starting main execution...")
+    logger.info("Starting main execution...")
     try:
         # Create a single MCP server connection
-        print("Establishing connection to MCP server...")
+        logger.info("Establishing connection to MCP server...")
+        
+        # Get absolute path to mcp_server.py
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        server_path = os.path.join(current_dir, "mcp_server.py")
+        
         server_params = StdioServerParameters(
             command="python",
-            args=["upgraded_mcp_paint_app/mcp_server.py"]
+            args=[server_path]
         )
 
         async with stdio_client(server_params) as (read, write):
-            print("Connection established, creating session...")
+            logger.info("Connection established, creating session...")
             async with ClientSession(read, write) as session:
-                print("Session created, initializing...")
+                logger.info("Session created, initializing...")
                 await session.initialize()
                 
                 # Get available tools
-                print("Requesting tool list...")
+                logger.info("Requesting tool list...")
                 tools_result = await session.list_tools()
                 tools = tools_result.tools
                 print(f"Successfully retrieved {len(tools)} tools")
@@ -107,26 +158,23 @@ async def main():
                             tools_description.append(tool_desc)
                             print(f"Added description for tool: {tool_desc}")
                         except Exception as e:
-                            print(f"Error processing tool {i}: {e}")
+                            logger.error(f"Error processing tool {i}: {e}")
                             tools_description.append(f"{i+1}. Error processing tool")
                     
                     tools_description = "\n".join(tools_description)
                     print("Successfully created tools description")
                 except Exception as e:
-                    print(f"Error creating tools description: {e}")
+                    logger.error(f"Error creating tools description: {e}")
                     tools_description = "Error loading tools"
                 
                 print("Created system prompt...")
                 
                 system_prompt = f"""
-                You are a math agent with painting skills, solving complex math expressions step-by-step.
-                You have access to various mathematical tools for calculations and verifications, as well as an MSPaint application to draw and present your solution on a canvas.
+                You are a math agent solving complex math expressions step-by-step.
+                You have access to various mathematical tools for calculations and verifications.
 
                 Available Tools:
                 {tools_description}
-
-                MSPaint Application Information:
-                - Rectangle coordinates: x1 = 763, y1 = 595, x2 = 1788, y2 = 1123
 
                 You must respond with EXACTLY ONE LINE in one of these formats (no additional text):
 
@@ -135,9 +183,6 @@ async def main():
 
                 2. For final answers:
                 FINAL_ANSWER: <NUMBER>
-
-                3. For completing the task:
-                COMPLETE_RUN
 
                 Instructions:
                 - Start by calling the show_reasoning tool ONLY ONCE with a list of all step-by-step reasoning steps explaining how you will solve the problem. Once called, NEVER CALL IT AGAIN UNDER ANY CIRCUMSTANCES.
@@ -157,20 +202,8 @@ async def main():
                 - Once verify_consistency return True, submit your final result as:
                 FINAL_ANSWER: <NUMBER>
 
-                Paint Instructions:
-                - To draw in Paint, follow this sequence strictly:
-                1. Call open_paint to start the Paint application.
-                2. Verify Paint is open using verify_paint_open.
-                3. If verify_paint_open returns False, retry opening Paint until it succeeds.
-                4. After Paint is open, draw a rectangle using draw_rectangle with correct parameters.
-                5. Add text using add_text_in_paint, inserting your FINAL_ANSWER: <NUMBER>.
-
-                Final Step:
-                - After completing all calculations, verifications, and drawings, call:
-                COMPLETE_RUN
-
                 Strictly follow the above guidelines.
-                Your entire response should always be a single line starting with either FUNCTION_CALL:, FINAL_ANSWER: or COMPLETE_RUN."""
+                Your entire response should always be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER:"""
 
 
                 ## verify_consistency part-
@@ -195,16 +228,17 @@ async def main():
                 # User: Verified correct.
                 # Assistant: FINAL_ANSWER: [20]
 
-                query = """Solve ((3000 - (400+552)) / 2 + 1024"""
+                # query = """Solve ((3000 - (400+552)) / 2 + 1024"""
                 print("Starting iteration loop...")
                 
                 # Use global iteration variables
                 global iteration, last_response
+                final_answer = None
                 
                 while iteration < max_iterations:
                     print(f"\n--- Iteration {iteration + 1} ---")
                     if last_response is None:
-                        current_query = query
+                        current_query = expression
                     else:
                         current_query = current_query + "\n\n" + " ".join(iteration_response)
                         current_query = current_query + "  What should you do next? Do not generate any additional text."
@@ -302,10 +336,7 @@ async def main():
                             
                             result = await session.call_tool(func_name, arguments=arguments)
                             
-                            # Wait longer for Paint to be fully maximized
-                            if func_name.startswith("open_paint"):
-                                await asyncio.sleep(2)
-                            elif func_name.startswith("verify_consistency"):
+                            if func_name.startswith("verify_consistency"):
                                 await asyncio.sleep(5)
                             else:
                                 await asyncio.sleep(1)
@@ -350,48 +381,12 @@ async def main():
                             break
 
                     elif response_text.startswith("FINAL_ANSWER:"):
-                        print("\n=== Math Agent Execution Complete ===")
-                        iteration_response.append(
-                                f"In the {iteration + 1} you completed calculations with {response_text}."
-                                f"Now call the paint tools starting with open_paint"
-                                f"Then draw_rectangle with Rectangle co-ordinates followed by add_text_in_paint with the {response_text} as text."
-                                "Do not repeat the FINAL_ANSWER. Proceed with the paint steps. Do not generate any additional text. I repeat, do not generate any additional text."
-                            )
-                        last_response = iteration_result
-                        # Commented out the manual call of paint tools
-                        # result = await session.call_tool("open_paint")
-                        # print(result.content[0].text)
-
-                        # # Wait longer for Paint to be fully maximized
-                        # await asyncio.sleep(1)
-
-                        # # Draw a rectangle
-                        # ##  Change this for my screen
-                        # result = await session.call_tool(
-                        #     "draw_rectangle",
-                        #     arguments={
-                        #         "x1": 763, #780,
-                        #         "y1": 595, #380,
-                        #         "x2": 1788, #1140,
-                        #         "y2": 1123, #700
-                        #     }
-                        # )
-                        # print(result.content[0].text)
-
-                        # # Draw rectangle and add text
-                        # result = await session.call_tool(
-                        #     "add_text_in_paint",
-                        #     arguments={
-                        #         "text": response_text
-                        #     }
-                        # )
-                        # print(result.content[0].text)
-                        # break
-                    elif response_text.startswith("COMPLETE_RUN"):
-                        print("\n=== Task complete. Ending run now ===")
+                        final_answer = response_text.split(":", 1)[1].strip()
                         break
 
                     iteration += 1
+
+                return {"result": final_answer if final_answer else "No result found"}
 
     except Exception as e:
         print(f"Error in main execution: {e}")
@@ -401,6 +396,7 @@ async def main():
         reset_state()  # Reset at the end of main
 
 if __name__ == "__main__":
-    asyncio.run(main())
-    
-    
+    logger.info("Starting Flask server...")
+    app.run(debug=True, port=5000)
+
+
