@@ -1,12 +1,13 @@
 import os
 from dotenv import load_dotenv
-from mcp import ClientSession, StdioServerParameters, types
+from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import asyncio
 from google import genai
 from concurrent.futures import TimeoutError
-from functools import partial
-import json
+# from functools import partial
+# import json
+import ast
 import logging
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -35,6 +36,37 @@ iteration_response = []
 mcp_session = None
 tools = None
 system_prompt = None
+
+
+async def parse_function_call_params(param_parts: list[str]) -> dict:
+    """
+    Parses key=value parts from the FUNCTION_CALL format.
+    Supports nested keys like input.string=foo and list values like input.int_list=[1,2,3]
+    Returns a nested dictionary.
+    """
+    result = {}
+
+    for part in param_parts:
+        if "=" not in part:
+            raise ValueError(f"Invalid parameter format (expected key=value): {part}")
+
+        key, value = part.split("=", 1)
+
+        # Try to parse as Python literal (int, float, list, etc.)
+        try:
+            parsed_value = ast.literal_eval(value)
+        except Exception:
+            parsed_value = value.strip()
+
+        # Support nested keys like input.string
+        keys = key.split(".")
+        current = result
+        for k in keys[:-1]:
+            current = current.setdefault(k, {})
+        current[keys[-1]] = parsed_value
+
+    return result
+
 
 async def generate_with_timeout(client, prompt, timeout=10):
     """Generate content with a timeout"""
@@ -179,7 +211,10 @@ async def main(expression=None):
                 You must respond with EXACTLY ONE LINE in one of these formats (no additional text):
 
                 1. For function calls:
-                FUNCTION_CALL: {{"name": function_name, "arguments": {{"param1": value1, "param2": value2}}}}
+                FUNCTION_CALL: function_name|input.param1=value1|input.param2=value2|...
+
+                    - You can also use nested keys for structured inputs (e.g., input.string, input.int_list).
+                    - For list-type inputs, use square brackets: input.int_list=[73,78,68,73,65]
 
                 2. For final answers:
                 FINAL_ANSWER: <NUMBER>
@@ -194,13 +229,22 @@ async def main(expression=None):
                 - Respond only with one line at a time.
                 - Call only one tool per response.
                 - After calculating a number, verify it by calling:
-                FUNCTION_CALL: {{"name": "verify_calculation", "arguments": {{"expression": <MATH_EXPRESSION>, "expected": <NUMBER>}}}}
+                FUNCTION_CALL: verify_calculation|input.expression=<MATH_EXPRESSION>|input.expected=<NUMBER>
                 - If verify_calculation returns False, re-evaluate your previous steps.
                 - Once you reach a final answer, check for consistency of all steps and calculations by calling:
-                FUNCTION_CALL: {{"name": "verify_consistency", "arguments": {{"steps": [[<MATH_EXPRESSION1>, <ANSWER1>], [<MATH_EXPRESSION2>, <ANSWER2>], ...]}}}} 
+                FUNCTION_CALL: verify_consistency|input.steps=[[<MATH_EXPRESSION1>, <ANSWER1>], [<MATH_EXPRESSION2>, <ANSWER2>], ...]
                 - If verify_consistency returns False, re-evaluate your previous steps.
                 - Once verify_consistency return True, submit your final result as:
                 FINAL_ANSWER: <NUMBER>
+
+                
+                ✅ Examples:
+                - FUNCTION_CALL: add|input.a=5|input.b=3
+                - FUNCTION_CALL: show_reasoning|input.steps=["First, add 2 and 20. [Arithmetic]", "Then, the result is the final answer. [Final Answer]"]
+                - FUNCTION_CALL: strings_to_chars_to_int|input.string=INDIA
+                - FUNCTION_CALL: int_list_to_exponential_sum|input.int_list=[73,78,68,73,65]
+                - FINAL_ANSWER: 42
+
 
                 Strictly follow the above guidelines.
                 Your entire response should always be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER:"""
@@ -264,24 +308,16 @@ async def main(expression=None):
 
 
                     if response_text.startswith("FUNCTION_CALL:"): # or response_text.startswith("USE_PAINT:"):
-                        ## Pre-process function_info
                         _, function_info = response_text.split(":", 1)
-                        # parts = [p.strip() for p in function_info.split("|")]
-                        # func_name, params = parts[0], parts[1:]
-                        function_info = function_info.strip()
-                        print(f"DEBUG: Raw function info: {function_info}")
-                        function_info = json.loads(function_info)
+                        parts = [p.strip() for p in function_info.split("|")]
+                        func_name, param_parts = parts[0], parts[1:]
 
-                        func_name = function_info.get("name")
-                        params = function_info.get("arguments", {})
-                        
                         print(f"\nDEBUG: Raw function info: {function_info}")
-                        # print(f"DEBUG: Split parts: {parts}")
+                        print(f"DEBUG: Split parts: {parts}")
                         print(f"DEBUG: Function name: {func_name}")
-                        print(f"DEBUG: Raw parameters: {params}")
-                        
+                        print(f"DEBUG: Raw parameters: {param_parts}")
+
                         try:
-                            # Find the matching tool to get its input schema
                             tool = next((t for t in tools if t.name == func_name), None)
                             if not tool:
                                 print(f"DEBUG: Available tools: {[t.name for t in tools]}")
@@ -290,63 +326,15 @@ async def main(expression=None):
                             print(f"DEBUG: Found tool: {tool.name}")
                             print(f"DEBUG: Tool schema: {tool.inputSchema}")
 
-                            # Prepare arguments according to the tool's input schema
-                            arguments = {}
-                            schema_properties = tool.inputSchema.get('properties', {})
-                            print(f"DEBUG: Schema properties: {schema_properties}")
-
-                            for param_name, param_info in schema_properties.items():
-                                if not params:  # Check if we have enough parameters
-                                    raise ValueError(f"Not enough parameters provided for {func_name}")
-                                    
-                                value = params.get(param_name)  # Get and remove the first parameter
-                                param_type = param_info.get('type', 'string')
-                                
-                                print(f"DEBUG: Converting parameter {param_name} with value {value} to type {param_type}")
-                                
-                                # Hard-coding processing of verify_consistency as it is more complex
-                                # if func_name == "verify_consistency":
-                                #     # Convert the value to a list of tuples
-                                #     value = value.strip('[()]').split('), (')
-                                #     value = [(item.split(',')[0].strip("' "), float(item.split(',')[1].strip())) for item in value]
-                                #     arguments[param_name] = value
-                                #     print(f"DEBUG: Converted verify_consistency parameters: {arguments[param_name]}")
-                                #     continue
-
-                                # Convert the value to the correct type based on the schema
-                                if param_type == 'integer':
-                                    arguments[param_name] = int(value)
-                                elif param_type == 'number':
-                                    arguments[param_name] = float(value)
-                                elif param_type == 'array':
-                                    # Handle array input
-                                    ## Hard-coding processing of verify_consistency as it is more complex
-                                    if func_name == "verify_consistency":
-                                        value = [(val[0], val[1]) for val in value]
-                                        arguments[param_name] = value
-                                        continue
-                                    elif isinstance(value, str):
-                                        value = value.strip('[]').split(',')
-                                    arguments[param_name] = [int(x.strip()) if x.strip().isdigit() else str(x.strip()) for x in value]
-                                else:
-                                    arguments[param_name] = str(value)
-
+                            arguments = await parse_function_call_params(param_parts)
                             print(f"DEBUG: Final arguments: {arguments}")
                             print(f"DEBUG: Calling tool {func_name}")
-                            
-                            result = await session.call_tool(func_name, arguments=arguments)
-                            
-                            if func_name.startswith("verify_consistency"):
-                                await asyncio.sleep(5)
-                            else:
-                                await asyncio.sleep(1)
 
+                            result = await session.call_tool(func_name, arguments=arguments)
                             print(f"DEBUG: Raw result: {result}")
-                            
-                            # Get the full result content
+
                             if hasattr(result, 'content'):
                                 print(f"DEBUG: Result has content attribute")
-                                # Handle multiple content items
                                 if isinstance(result.content, list):
                                     iteration_result = [
                                         item.text if hasattr(item, 'text') else str(item)
@@ -357,15 +345,11 @@ async def main(expression=None):
                             else:
                                 print(f"DEBUG: Result has no content attribute")
                                 iteration_result = str(result)
-                                
+
                             print(f"DEBUG: Final iteration result: {iteration_result}")
-                            
-                            # Format the response based on result type
-                            if isinstance(iteration_result, list):
-                                result_str = f"[{', '.join(iteration_result)}]"
-                            else:
-                                result_str = str(iteration_result)
-                            
+
+                            result_str = f"[{', '.join(iteration_result)}]" if isinstance(iteration_result, list) else str(iteration_result)
+
                             iteration_response.append(
                                 f"In the {iteration + 1} iteration you called {func_name} with {arguments} parameters, "
                                 f"and the function returned {result_str}."
@@ -380,7 +364,9 @@ async def main(expression=None):
                             iteration_response.append(f"Error in iteration {iteration + 1}: {str(e)}")
                             break
 
+
                     elif response_text.startswith("FINAL_ANSWER:"):
+                        print("\n=== Agent Execution Complete ===")
                         final_answer = response_text.split(":", 1)[1].strip()
                         break
 
