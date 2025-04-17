@@ -43,6 +43,35 @@ api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 action_layer.set_llm_client(client)
 
+async def initialize_session():
+    """Initialize MCP session and tools"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    server_path = os.path.join(current_dir, "mcp_server.py")
+    
+    server_params = StdioServerParameters(
+        command="python",
+        args=[server_path]
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        logger.info("Connection established, creating session...")
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # Get available tools
+            tools_result = await session.list_tools()
+            tools = tools_result.tools
+            
+            # Store session and tools in memory layer
+            memory_layer.store_mcp_session(session)
+            memory_layer.store_tools(tools)
+            
+            # Create and store system prompt
+            system_prompt = create_system_prompt(tools)
+            memory_layer.store_system_prompt(system_prompt)
+            
+            return session, tools
+
 # Initialize MCP session on startup
 async def init_app():
     """Initialize application state"""
@@ -164,35 +193,6 @@ async def main(expression=None):
         return {"error": str(e)}
     finally:
         memory_layer.reset_state()
-
-async def initialize_session():
-    """Initialize MCP session and tools"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    server_path = os.path.join(current_dir, "mcp_server.py")
-    
-    server_params = StdioServerParameters(
-        command="python",
-        args=[server_path]
-    )
-
-    async with stdio_client(server_params) as (read, write):
-        logger.info("Connection established, creating session...")
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            
-            # Get available tools
-            tools_result = await session.list_tools()
-            tools = tools_result.tools
-            
-            # Store session and tools in memory layer
-            memory_layer.store_mcp_session(session)
-            memory_layer.store_tools(tools)
-            
-            # Create and store system prompt
-            system_prompt = create_system_prompt(tools)
-            memory_layer.store_system_prompt(system_prompt)
-            
-            return session, tools
 
 def create_system_prompt(tools) -> str:
     """Create system prompt with available tools"""
