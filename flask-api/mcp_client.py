@@ -233,11 +233,14 @@ def create_system_prompt(tools) -> str:
         1. For function calls:
         FUNCTION_CALL: function_name|input.param1=value1|input.param2=value2|...
 
+            - You can also use nested keys for structured inputs (e.g., input.string, input.int_list).
+            - For list-type inputs, use square brackets: input.int_list=[73,78,68,73,65]
+
         2. For final answers:
         FINAL_ANSWER: <NUMBER>
 
         Instructions:
-        - Start by calling the show_reasoning tool ONLY ONCE with a list of all step-by-step reasoning steps.
+        - Start by calling the show_reasoning tool ONLY ONCE with a list of all step-by-step reasoning steps explaining how you will solve the problem. Once called, NEVER CALL IT AGAIN UNDER ANY CIRCUMSTANCES.
         - When reasoning, tag each step with the reasoning type (e.g., [Arithmetic], [Logical Check]).
         - Use all available math tools to solve the problem step-by-step.
         - When a function returns multiple values, process all of them.
@@ -245,9 +248,26 @@ def create_system_prompt(tools) -> str:
         - Do not skip steps — perform all calculations sequentially.
         - Respond only with one line at a time.
         - Call only one tool per response.
-        - After calculating a number, verify it.
-        - Once you reach a final answer, check for consistency of all steps.
-        - Once verified, submit your final result as: FINAL_ANSWER: <NUMBER>
+        - After calculating a number, verify it by calling:
+        FUNCTION_CALL: verify_calculation|input.expression=<MATH_EXPRESSION>|input.expected=<NUMBER>
+        - If verify_calculation returns False, re-evaluate your previous steps.
+        - Once you reach a final answer, check for consistency of all steps and calculations by calling:
+        FUNCTION_CALL: verify_consistency|input.steps=[[<MATH_EXPRESSION1>, <ANSWER1>], [<MATH_EXPRESSION2>, <ANSWER2>], ...]
+        - If verify_consistency returns False, re-evaluate your previous steps.
+        - Once verify_consistency return True, submit your final result as:
+        FINAL_ANSWER: <NUMBER>
+
+        
+        ✅ Examples:
+        - FUNCTION_CALL: add|input.a=5|input.b=3
+        - FUNCTION_CALL: show_reasoning|input.steps=["First, add 2 and 20. [Arithmetic]", "Then, the result is the final answer. [Final Answer]"]
+        - FUNCTION_CALL: strings_to_chars_to_int|input.string=INDIA
+        - FUNCTION_CALL: int_list_to_exponential_sum|input.int_list=[73,78,68,73,65]
+        - FINAL_ANSWER: 42
+
+
+        Strictly follow the above guidelines.
+        Your entire response should always be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER:
         """
     except Exception as e:
         logger.error(f"Error creating system prompt: {e}")
