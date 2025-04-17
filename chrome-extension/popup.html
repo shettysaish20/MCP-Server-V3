@@ -53,11 +53,96 @@
             text-align: center;
             margin: 10px 0;
         }
+        .preferences-section {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        .form-group {
+            margin-bottom: 10px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .form-group select, .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .topic-checkbox {
+            margin-right: 10px;
+        }
+        .collapsible {
+            background-color: #4CAF50;
+            padding: 10px;
+            cursor: pointer;
+            border: none;
+            text-align: left;
+            width: 100%;
+            border-radius: 4px;
+        }
+        .content {
+            display: none;
+            padding: 10px;
+        }
+        .content.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>Math Expression Evaluator</h2>
+        
+        <button class="collapsible">Preferences</button>
+        <div class="content preferences-section">
+            <div class="form-group">
+                <label for="detail_level">Detail Level:</label>
+                <select id="detail_level">
+                    <option value="basic">Basic</option>
+                    <option value="intermediate" selected>Intermediate</option>
+                    <option value="advanced">Advanced</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="notation_style">Notation Style:</label>
+                <select id="notation_style">
+                    <option value="standard" selected>Standard</option>
+                    <option value="scientific">Scientific</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Topics:</label>
+                <div id="topics">
+                    <label class="topic-checkbox">
+                        <input type="checkbox" value="algebra" checked> Algebra
+                    </label>
+                    <label class="topic-checkbox">
+                        <input type="checkbox" value="calculus" checked> Calculus
+                    </label>
+                    <label class="topic-checkbox">
+                        <input type="checkbox" value="geometry"> Geometry
+                    </label>
+                    <label class="topic-checkbox">
+                        <input type="checkbox" value="trigonometry"> Trigonometry
+                    </label>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="decimal_places">Decimal Places:</label>
+                <input type="number" id="decimal_places" value="2" min="0" max="10">
+            </div>
+            
+            <button id="savePreferences">Save Preferences</button>
+        </div>
+
         <input type="text" id="mathExpression" placeholder="Enter a math expression (e.g., (2 + 3) * 4)">
         <div class="button-group">
             <button id="evaluate">Evaluate</button>

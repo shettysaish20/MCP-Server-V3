@@ -3,7 +3,7 @@
   "name": "Flask API Extension",
   "version": "1.0",
   "description": "A Chrome extension that connects to a local Flask API",
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "storage"],
   "action": {
     "default_popup": "popup.html"
   }
