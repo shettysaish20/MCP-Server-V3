@@ -43,6 +43,86 @@ api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 action_layer.set_llm_client(client)
 
+async def create_system_prompt(tools) -> str:
+    """Create system prompt with available tools"""
+    try:
+        tools_description = []
+        for i, tool in enumerate(tools):
+            try:
+                params = tool.inputSchema
+                desc = getattr(tool, 'description', 'No description available')
+                name = getattr(tool, 'name', f'tool_{i}')
+                
+                if 'properties' in params:
+                    param_details = []
+                    for param_name, param_info in params['properties'].items():
+                        param_type = param_info.get('type', 'unknown')
+                        param_details.append(f"{param_name}: {param_type}")
+                    params_str = ', '.join(param_details)
+                else:
+                    params_str = 'no parameters'
+
+                tool_desc = f"{i+1}. {name}({params_str}) - {desc}"
+                tools_description.append(tool_desc)
+            except Exception as e:
+                logger.error(f"Error processing tool {i}: {e}")
+                tools_description.append(f"{i+1}. Error processing tool")
+        
+        tools_description = "\n".join(tools_description)
+        
+        return f"""
+        You are a math agent solving complex math expressions step-by-step.
+        You have access to various mathematical tools for calculations and verifications.
+
+        Available Tools:
+        {tools_description}
+
+        You must respond with EXACTLY ONE LINE in one of these formats (no additional text):
+
+        1. For function calls:
+        FUNCTION_CALL: function_name|input.param1=value1|input.param2=value2|...
+
+            - You can also use nested keys for structured inputs (e.g., input.string, input.int_list).
+            - For list-type inputs, use square brackets: input.int_list=[73,78,68,73,65]
+
+        2. For final answers:
+        FINAL_ANSWER: <NUMBER>
+
+        Instructions:
+        - Start by calling the show_reasoning tool ONLY ONCE with a list of all step-by-step reasoning steps explaining how you will solve the problem. Once called, NEVER CALL IT AGAIN UNDER ANY CIRCUMSTANCES.
+        - When reasoning, tag each step with the reasoning type (e.g., [Arithmetic], [Logical Check]).
+        - Use all available math tools to solve the problem step-by-step.
+        - When a function returns multiple values, process all of them.
+        - Apply BODMAS rules: start with the innermost parentheses and work outward.
+        - Do not skip steps — perform all calculations sequentially.
+        - Respond only with one line at a time.
+        - Call only one tool per response.
+        - After calculating a number, verify it by calling:
+        FUNCTION_CALL: verify_calculation|input.expression=<MATH_EXPRESSION>|input.expected=<NUMBER>
+        - If verify_calculation returns False, re-evaluate your previous steps.
+        - Once you reach a final answer, check for consistency of all steps and calculations by calling:
+        FUNCTION_CALL: verify_consistency|input.steps=[[<MATH_EXPRESSION1>, <ANSWER1>], [<MATH_EXPRESSION2>, <ANSWER2>], ...]
+        - If verify_consistency returns False, re-evaluate your previous steps.
+        - Once verify_consistency return True, submit your final result as:
+        FINAL_ANSWER: <NUMBER>
+
+        
+        ✅ Examples:
+        - FUNCTION_CALL: add|input.a=5|input.b=3
+        - FUNCTION_CALL: show_reasoning|input.steps=["First, add 2 and 20. [Arithmetic]", "Then, the result is the final answer. [Final Answer]"]
+        - FUNCTION_CALL: strings_to_chars_to_int|input.string=INDIA
+        - FUNCTION_CALL: int_list_to_exponential_sum|input.int_list=[73,78,68,73,65]
+        - FINAL_ANSWER: 42
+
+
+        Strictly follow the above guidelines.
+        Your entire response should always be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER:
+        """
+    except Exception as e:
+        logger.error(f"Error creating system prompt: {e}")
+        return "Error loading tools"
+    
+
 async def initialize_session():
     """Initialize MCP session and tools"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +147,7 @@ async def initialize_session():
             memory_layer.store_tools(tools)
             
             # Create and store system prompt
-            system_prompt = create_system_prompt(tools)
+            system_prompt = await create_system_prompt(tools)
             memory_layer.store_system_prompt(system_prompt)
             
             return session, tools
@@ -193,85 +273,6 @@ async def main(expression=None):
         return {"error": str(e)}
     finally:
         memory_layer.reset_state()
-
-def create_system_prompt(tools) -> str:
-    """Create system prompt with available tools"""
-    try:
-        tools_description = []
-        for i, tool in enumerate(tools):
-            try:
-                params = tool.inputSchema
-                desc = getattr(tool, 'description', 'No description available')
-                name = getattr(tool, 'name', f'tool_{i}')
-                
-                if 'properties' in params:
-                    param_details = []
-                    for param_name, param_info in params['properties'].items():
-                        param_type = param_info.get('type', 'unknown')
-                        param_details.append(f"{param_name}: {param_type}")
-                    params_str = ', '.join(param_details)
-                else:
-                    params_str = 'no parameters'
-
-                tool_desc = f"{i+1}. {name}({params_str}) - {desc}"
-                tools_description.append(tool_desc)
-            except Exception as e:
-                logger.error(f"Error processing tool {i}: {e}")
-                tools_description.append(f"{i+1}. Error processing tool")
-        
-        tools_description = "\n".join(tools_description)
-        
-        return f"""
-        You are a math agent solving complex math expressions step-by-step.
-        You have access to various mathematical tools for calculations and verifications.
-
-        Available Tools:
-        {tools_description}
-
-        You must respond with EXACTLY ONE LINE in one of these formats (no additional text):
-
-        1. For function calls:
-        FUNCTION_CALL: function_name|input.param1=value1|input.param2=value2|...
-
-            - You can also use nested keys for structured inputs (e.g., input.string, input.int_list).
-            - For list-type inputs, use square brackets: input.int_list=[73,78,68,73,65]
-
-        2. For final answers:
-        FINAL_ANSWER: <NUMBER>
-
-        Instructions:
-        - Start by calling the show_reasoning tool ONLY ONCE with a list of all step-by-step reasoning steps explaining how you will solve the problem. Once called, NEVER CALL IT AGAIN UNDER ANY CIRCUMSTANCES.
-        - When reasoning, tag each step with the reasoning type (e.g., [Arithmetic], [Logical Check]).
-        - Use all available math tools to solve the problem step-by-step.
-        - When a function returns multiple values, process all of them.
-        - Apply BODMAS rules: start with the innermost parentheses and work outward.
-        - Do not skip steps — perform all calculations sequentially.
-        - Respond only with one line at a time.
-        - Call only one tool per response.
-        - After calculating a number, verify it by calling:
-        FUNCTION_CALL: verify_calculation|input.expression=<MATH_EXPRESSION>|input.expected=<NUMBER>
-        - If verify_calculation returns False, re-evaluate your previous steps.
-        - Once you reach a final answer, check for consistency of all steps and calculations by calling:
-        FUNCTION_CALL: verify_consistency|input.steps=[[<MATH_EXPRESSION1>, <ANSWER1>], [<MATH_EXPRESSION2>, <ANSWER2>], ...]
-        - If verify_consistency returns False, re-evaluate your previous steps.
-        - Once verify_consistency return True, submit your final result as:
-        FINAL_ANSWER: <NUMBER>
-
-        
-        ✅ Examples:
-        - FUNCTION_CALL: add|input.a=5|input.b=3
-        - FUNCTION_CALL: show_reasoning|input.steps=["First, add 2 and 20. [Arithmetic]", "Then, the result is the final answer. [Final Answer]"]
-        - FUNCTION_CALL: strings_to_chars_to_int|input.string=INDIA
-        - FUNCTION_CALL: int_list_to_exponential_sum|input.int_list=[73,78,68,73,65]
-        - FINAL_ANSWER: 42
-
-
-        Strictly follow the above guidelines.
-        Your entire response should always be a single line starting with either FUNCTION_CALL: or FINAL_ANSWER:
-        """
-    except Exception as e:
-        logger.error(f"Error creating system prompt: {e}")
-        return "Error loading tools"
 
 if __name__ == "__main__":
     logger.info("Starting Flask server...")
