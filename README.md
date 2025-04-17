@@ -105,11 +105,17 @@ By default, server runs at: `http://localhost:5000/`
   - Flask
   - Flask-Cors
 
-> *(All backend libraries are listed in `requirements.txt`.)*
+   > *(All backend libraries are listed in `requirements.txt`.)*
 
 - **Frontend (Extension):**
   - Pure JavaScript + HTML/CSS (no external libraries).
-  
+
+---
+
+## 🚀 Running
+
+![Extension Running](images/extension_running.png)
+
 ---
 
 ## 📄 License
