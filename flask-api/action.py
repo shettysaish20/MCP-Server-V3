@@ -89,7 +89,7 @@ class ActionLayer:
                 return str(result)
             
         except Exception as e:
-            logger.error(f"Error executing function {function_name}: {str(e)}")
+            # logger.error(f"Error executing function {function_name}: {str(e)}")
             return f"Error executing function {function_name}: {str(e)}"
 
     async def _generate_retry(self, memory_layer: Any) -> str:
