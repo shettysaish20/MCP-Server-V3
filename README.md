@@ -109,19 +109,7 @@ By default, server runs at: `http://localhost:5000/`
 
 - **Frontend (Extension):**
   - Pure JavaScript + HTML/CSS (no external libraries).
-
----
-
-## 🧠 About the MCP Server
-
-The **MCP Server** (Memory, Cognition, Perception) mimics a lightweight AI agent by:
-
-- Parsing natural math language (Perception)
-- Deciding operations and execution flow (Cognition)
-- Remembering past inputs (Memory)
-
-This makes the server extensible for more advanced NLP and AI tasks beyond simple calculations in future.
-
+  
 ---
 
 ## 📄 License
